@@ -59,7 +59,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 private const val TAG = "MyApp"
 private const val TOP_K = 5
-private const val LIVE_RETRIEVAL_INTERVAL_MS = 1_000L
+private const val LIVE_RETRIEVAL_INTERVAL_MS = 50L
 
 @Composable
 fun ImageRetrievalDemoScreen(modifier: Modifier = Modifier) {
@@ -245,6 +245,7 @@ private fun LiveCameraRetrievalContent(
         mutableStateOf(context.hasCameraPermission())
     }
     var isAnalyzing by remember { mutableStateOf(true) }
+    var inferenceFps by remember { mutableStateOf<Float?>(null) }
     var statusText by remember {
         mutableStateOf(
             if (hasCameraPermission) {
@@ -300,6 +301,7 @@ private fun LiveCameraRetrievalContent(
             retrievalEngine = retrievalEngine,
             isAnalyzing = isAnalyzing,
             onStatusChanged = { statusText = it },
+            onInferenceFpsChanged = { inferenceFps = it },
             onResultsChanged = { topKResults ->
                 results.clear()
                 results.addAll(topKResults)
@@ -331,6 +333,14 @@ private fun LiveCameraRetrievalContent(
 
     Text(text = statusText)
 
+    Spacer(modifier = Modifier.height(8.dp))
+
+    Text(
+        text = inferenceFps?.let {
+            "Inference FPS: ${"%.2f".format(it)}"
+        } ?: "Inference FPS: --"
+    )
+
     Spacer(modifier = Modifier.height(24.dp))
 
     if (results.isNotEmpty()) {
@@ -343,6 +353,7 @@ private fun LiveCameraPreview(
     retrievalEngine: ClipRetrievalEngine,
     isAnalyzing: Boolean,
     onStatusChanged: (String) -> Unit,
+    onInferenceFpsChanged: (Float) -> Unit,
     onResultsChanged: (List<RetrievalResult>) -> Unit
 ) {
     val context = LocalContext.current
@@ -395,6 +406,7 @@ private fun LiveCameraPreview(
                         try {
                             val bitmap = imageProxy.toBitmapFromRgbaPlane()
                             val rotationDegrees = imageProxy.imageInfo.rotationDegrees
+                            val inferenceStartedAtNs = System.nanoTime()
 
                             val topKResults = try {
                                 retrievalEngine.retrieveTopK(
@@ -405,9 +417,17 @@ private fun LiveCameraPreview(
                             } finally {
                                 bitmap.recycle()
                             }
+                            val inferenceElapsedMs =
+                                (System.nanoTime() - inferenceStartedAtNs) / 1_000_000.0f
+                            val inferenceFps = if (inferenceElapsedMs > 0.0f) {
+                                1_000.0f / inferenceElapsedMs
+                            } else {
+                                0.0f
+                            }
 
                             mainHandler.post {
                                 onResultsChanged(topKResults)
+                                onInferenceFpsChanged(inferenceFps)
                                 onStatusChanged("Live retrieval updated")
                             }
                         } catch (e: Exception) {
