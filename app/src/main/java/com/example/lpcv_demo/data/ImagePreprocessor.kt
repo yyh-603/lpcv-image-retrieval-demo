@@ -2,6 +2,7 @@ package com.example.lpcv_demo.data
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
 import android.util.Log
 import kotlin.math.min
 
@@ -55,6 +56,60 @@ object ImagePreprocessor {
         Log.d(TAG, "Image tensor first values = ${tensor.take(8)}")
 
         return tensor
+    }
+
+    fun preprocessBitmap(
+        bitmap: Bitmap,
+        rotationDegrees: Int = 0,
+        width: Int = INPUT_WIDTH,
+        height: Int = INPUT_HEIGHT
+    ): FloatArray {
+        Log.d(TAG, "Original frame bitmap size = ${bitmap.width} x ${bitmap.height}")
+
+        val rotatedBitmap = rotateBitmap(bitmap, rotationDegrees)
+        val croppedBitmap = centerCropToSquare(rotatedBitmap)
+        val resizedBitmap = Bitmap.createScaledBitmap(croppedBitmap, width, height, true)
+
+        Log.d(TAG, "Preprocessed frame bitmap size = ${resizedBitmap.width} x ${resizedBitmap.height}")
+
+        val tensor = bitmapToNormalizedNchw(resizedBitmap, width, height)
+
+        if (croppedBitmap != rotatedBitmap) {
+            croppedBitmap.recycle()
+        }
+
+        if (resizedBitmap != croppedBitmap) {
+            resizedBitmap.recycle()
+        }
+
+        if (rotatedBitmap != bitmap) {
+            rotatedBitmap.recycle()
+        }
+
+        Log.d(TAG, "Frame image tensor size = ${tensor.size}")
+        return tensor
+    }
+
+    private fun rotateBitmap(bitmap: Bitmap, rotationDegrees: Int): Bitmap {
+        val normalizedRotation = ((rotationDegrees % 360) + 360) % 360
+
+        if (normalizedRotation == 0) {
+            return bitmap
+        }
+
+        val matrix = Matrix().apply {
+            postRotate(normalizedRotation.toFloat())
+        }
+
+        return Bitmap.createBitmap(
+            bitmap,
+            0,
+            0,
+            bitmap.width,
+            bitmap.height,
+            matrix,
+            true
+        )
     }
 
     private fun centerCropToSquare(bitmap: Bitmap): Bitmap {

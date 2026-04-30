@@ -1,6 +1,7 @@
 package com.example.lpcv_demo.retrieval
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.net.Uri
 import android.util.Log
 import com.example.lpcv_demo.data.EmbeddingAssetLoader
@@ -48,6 +49,30 @@ class ClipRetrievalEngine(
 
         val inputTensor = ImagePreprocessor.preprocessImageFile(imagePath)
 
+        return retrieveTopK(inputTensor = inputTensor, k = k)
+    }
+
+    fun retrieveTopK(
+        bitmap: Bitmap,
+        rotationDegrees: Int = 0,
+        k: Int = 5
+    ): List<RetrievalResult> {
+        imageEncoder.initialize()
+
+        Log.d("MyApp", "retrieveTopK bitmap = ${bitmap.width} x ${bitmap.height}, rotation = $rotationDegrees")
+
+        val inputTensor = ImagePreprocessor.preprocessBitmap(
+            bitmap = bitmap,
+            rotationDegrees = rotationDegrees
+        )
+
+        return retrieveTopK(inputTensor = inputTensor, k = k)
+    }
+
+    private fun retrieveTopK(
+        inputTensor: FloatArray,
+        k: Int
+    ): List<RetrievalResult> {
         val imageEmbedding = imageEncoder.encode(inputTensor)
 
         Log.d("MyApp", "SNPE image embedding dim = ${imageEmbedding.size}")
