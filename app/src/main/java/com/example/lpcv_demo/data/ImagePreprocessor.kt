@@ -2,12 +2,15 @@ package com.example.lpcv_demo.data
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
 import android.graphics.Matrix
+import android.graphics.Paint
 import android.util.Log
 import kotlin.math.min
 
 object ImagePreprocessor {
     private const val TAG = "MyApp"
+    private const val BYTES_TO_FLOAT = 1.0f / 255.0f
 
     const val INPUT_WIDTH = 224
     const val INPUT_HEIGHT = 224
@@ -23,6 +26,12 @@ object ImagePreprocessor {
         0.26862954f,
         0.26130258f,
         0.27577711f
+    )
+
+    private val invStd = floatArrayOf(
+        1.0f / std[0],
+        1.0f / std[1],
+        1.0f / std[2]
     )
 
     fun preprocessImageFile(
@@ -66,50 +75,60 @@ object ImagePreprocessor {
     ): FloatArray {
         Log.d(TAG, "Original frame bitmap size = ${bitmap.width} x ${bitmap.height}")
 
-        val rotatedBitmap = rotateBitmap(bitmap, rotationDegrees)
-        val croppedBitmap = centerCropToSquare(rotatedBitmap)
-        val resizedBitmap = Bitmap.createScaledBitmap(croppedBitmap, width, height, true)
+        val resizedBitmap = centerCropRotateAndResize(
+            bitmap = bitmap,
+            rotationDegrees = rotationDegrees,
+            width = width,
+            height = height
+        )
 
         Log.d(TAG, "Preprocessed frame bitmap size = ${resizedBitmap.width} x ${resizedBitmap.height}")
 
         val tensor = bitmapToNormalizedNchw(resizedBitmap, width, height)
 
-        if (croppedBitmap != rotatedBitmap) {
-            croppedBitmap.recycle()
-        }
-
-        if (resizedBitmap != croppedBitmap) {
-            resizedBitmap.recycle()
-        }
-
-        if (rotatedBitmap != bitmap) {
-            rotatedBitmap.recycle()
-        }
+        resizedBitmap.recycle()
 
         Log.d(TAG, "Frame image tensor size = ${tensor.size}")
         return tensor
     }
 
-    private fun rotateBitmap(bitmap: Bitmap, rotationDegrees: Int): Bitmap {
+    private fun centerCropRotateAndResize(
+        bitmap: Bitmap,
+        rotationDegrees: Int,
+        width: Int,
+        height: Int
+    ): Bitmap {
         val normalizedRotation = ((rotationDegrees % 360) + 360) % 360
-
-        if (normalizedRotation == 0) {
-            return bitmap
+        val rotatedWidth = if (normalizedRotation == 90 || normalizedRotation == 270) {
+            bitmap.height
+        } else {
+            bitmap.width
         }
+        val rotatedHeight = if (normalizedRotation == 90 || normalizedRotation == 270) {
+            bitmap.width
+        } else {
+            bitmap.height
+        }
+        val cropSize = min(rotatedWidth, rotatedHeight).toFloat()
+        val cropX = (rotatedWidth - cropSize) * 0.5f
+        val cropY = (rotatedHeight - cropSize) * 0.5f
 
-        val matrix = Matrix().apply {
+        val output = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val sourceToRotated = Matrix().apply {
+            postTranslate(-bitmap.width * 0.5f, -bitmap.height * 0.5f)
             postRotate(normalizedRotation.toFloat())
+            postTranslate(rotatedWidth * 0.5f, rotatedHeight * 0.5f)
+        }
+        val paint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.DITHER_FLAG)
+
+        Canvas(output).apply {
+            scale(width / cropSize, height / cropSize)
+            translate(-cropX, -cropY)
+            concat(sourceToRotated)
+            drawBitmap(bitmap, 0.0f, 0.0f, paint)
         }
 
-        return Bitmap.createBitmap(
-            bitmap,
-            0,
-            0,
-            bitmap.width,
-            bitmap.height,
-            matrix,
-            true
-        )
+        return output
     }
 
     private fun centerCropToSquare(bitmap: Bitmap): Bitmap {
@@ -132,9 +151,10 @@ object ImagePreprocessor {
         width: Int,
         height: Int
     ): FloatArray {
-        val tensor = FloatArray(CHANNELS * height * width)
+        val channelSize = height * width
+        val tensor = FloatArray(CHANNELS * channelSize)
 
-        val pixels = IntArray(width * height)
+        val pixels = IntArray(channelSize)
         bitmap.getPixels(
             pixels,
             0,
@@ -150,18 +170,14 @@ object ImagePreprocessor {
                 val pixelIndex = y * width + x
                 val pixel = pixels[pixelIndex]
 
-                val r = ((pixel shr 16) and 0xFF) / 255.0f
-                val g = ((pixel shr 8) and 0xFF) / 255.0f
-                val b = (pixel and 0xFF) / 255.0f
-
-                val rNorm = (r - mean[0]) / std[0]
-                val gNorm = (g - mean[1]) / std[1]
-                val bNorm = (b - mean[2]) / std[2]
+                val r = ((pixel shr 16) and 0xFF) * BYTES_TO_FLOAT
+                val g = ((pixel shr 8) and 0xFF) * BYTES_TO_FLOAT
+                val b = (pixel and 0xFF) * BYTES_TO_FLOAT
 
                 // NCHW layout: [C, H, W]
-                tensor[0 * height * width + y * width + x] = rNorm
-                tensor[1 * height * width + y * width + x] = gNorm
-                tensor[2 * height * width + y * width + x] = bNorm
+                tensor[pixelIndex] = (r - mean[0]) * invStd[0]
+                tensor[channelSize + pixelIndex] = (g - mean[1]) * invStd[1]
+                tensor[channelSize * 2 + pixelIndex] = (b - mean[2]) * invStd[2]
             }
         }
 

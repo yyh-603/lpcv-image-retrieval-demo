@@ -37,6 +37,7 @@ class SnpeImageEncoder(private val context: Context) : Closeable {
         val network = SNPE.NeuralNetworkBuilder(application)
             .setDebugEnabled(false)
             .setRuntimeOrder(NeuralNetwork.Runtime.DSP)
+            .setPerformanceProfile(NeuralNetwork.PerformanceProfile.BURST)
             .setModel(java.io.File(modelPath))
             .setInputDimensions(inputDimensions)
             .setCpuFallbackEnabled(true)
