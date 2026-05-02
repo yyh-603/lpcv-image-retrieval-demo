@@ -32,6 +32,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -52,6 +54,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import coil.compose.rememberAsyncImagePainter
+import com.example.lpcv_demo.model.ImageEncoderModel
 import com.example.lpcv_demo.model.RetrievalResult
 import com.example.lpcv_demo.retrieval.ClipRetrievalEngine
 import java.util.concurrent.Executors
@@ -60,16 +63,16 @@ import java.util.concurrent.atomic.AtomicBoolean
 private const val TAG = "MyApp"
 private const val TOP_K = 5
 private const val LIVE_RETRIEVAL_INTERVAL_MS = 50L
+private const val FPS_AVERAGE_WINDOW_SIZE = 30
 
 @Composable
-fun ImageRetrievalDemoScreen(modifier: Modifier = Modifier) {
-    val context = LocalContext.current
-
-    val retrievalEngine = remember {
-        ClipRetrievalEngine(context.applicationContext)
-    }
-
+fun ImageRetrievalDemoScreen(
+    retrievalEngine: ClipRetrievalEngine,
+    modifier: Modifier = Modifier
+) {
     var screenMode by remember { mutableStateOf(RetrievalScreenMode.Gallery) }
+    var selectedModel by remember { mutableStateOf(retrievalEngine.selectedModel) }
+    var modelVersion by remember { mutableStateOf(retrievalEngine.modelVersion) }
 
     Column(
         modifier = modifier
@@ -91,16 +94,77 @@ fun ImageRetrievalDemoScreen(modifier: Modifier = Modifier) {
             onModeSelected = { screenMode = it }
         )
 
+        Spacer(modifier = Modifier.height(16.dp))
+
+        ModelSelector(
+            availableModels = retrievalEngine.availableModels,
+            selectedModel = selectedModel,
+            onModelSelected = { model ->
+                if (retrievalEngine.selectModel(model)) {
+                    selectedModel = retrievalEngine.selectedModel
+                    modelVersion = retrievalEngine.modelVersion
+                }
+            }
+        )
+
         Spacer(modifier = Modifier.height(24.dp))
 
         when (screenMode) {
             RetrievalScreenMode.Gallery -> GalleryRetrievalContent(
-                retrievalEngine = retrievalEngine
+                retrievalEngine = retrievalEngine,
+                selectedModel = selectedModel,
+                modelVersion = modelVersion
             )
 
             RetrievalScreenMode.LiveCamera -> LiveCameraRetrievalContent(
-                retrievalEngine = retrievalEngine
+                retrievalEngine = retrievalEngine,
+                selectedModel = selectedModel,
+                modelVersion = modelVersion
             )
+        }
+    }
+}
+
+@Composable
+private fun ModelSelector(
+    availableModels: List<ImageEncoderModel>,
+    selectedModel: ImageEncoderModel,
+    onModelSelected: (ImageEncoderModel) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(
+            text = "Model: ${selectedModel.displayName}",
+            style = MaterialTheme.typography.bodyMedium
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Box {
+            OutlinedButton(
+                onClick = { expanded = true }
+            ) {
+                Text(selectedModel.displayName)
+            }
+
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false }
+            ) {
+                availableModels.forEach { model ->
+                    DropdownMenuItem(
+                        text = { Text(model.displayName) },
+                        onClick = {
+                            expanded = false
+                            onModelSelected(model)
+                        }
+                    )
+                }
+            }
         }
     }
 }
@@ -142,7 +206,9 @@ private fun ModeSwitcher(
 
 @Composable
 private fun GalleryRetrievalContent(
-    retrievalEngine: ClipRetrievalEngine
+    retrievalEngine: ClipRetrievalEngine,
+    selectedModel: ImageEncoderModel,
+    modelVersion: Int
 ) {
     var selectedImageUri by remember { mutableStateOf<Uri?>(null) }
 
@@ -152,6 +218,13 @@ private fun GalleryRetrievalContent(
 
     var statusText by remember {
         mutableStateOf("No image selected")
+    }
+
+    LaunchedEffect(modelVersion) {
+        if (modelVersion > 0) {
+            results.clear()
+            statusText = "Model switched: ${selectedModel.displayName}"
+        }
     }
 
     val imagePickerLauncher = rememberLauncherForActivityResult(
@@ -217,7 +290,7 @@ private fun GalleryRetrievalContent(
                     results.clear()
                     results.addAll(topKResults)
 
-                    statusText = "Retrieval finished"
+                    statusText = "Retrieval finished: ${retrievalEngine.selectedModel.displayName}"
                 } catch (e: Exception) {
                     Log.e(TAG, "Retrieval failed", e)
                     statusText = "Retrieval failed: ${e.message}"
@@ -237,7 +310,9 @@ private fun GalleryRetrievalContent(
 
 @Composable
 private fun LiveCameraRetrievalContent(
-    retrievalEngine: ClipRetrievalEngine
+    retrievalEngine: ClipRetrievalEngine,
+    selectedModel: ImageEncoderModel,
+    modelVersion: Int
 ) {
     val context = LocalContext.current
 
@@ -257,6 +332,14 @@ private fun LiveCameraRetrievalContent(
     }
     val results = remember {
         mutableStateListOf<RetrievalResult>()
+    }
+
+    LaunchedEffect(modelVersion) {
+        if (modelVersion > 0) {
+            results.clear()
+            inferenceFps = null
+            statusText = "Model switched: ${selectedModel.displayName}"
+        }
     }
 
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -299,6 +382,8 @@ private fun LiveCameraRetrievalContent(
     ) {
         LiveCameraPreview(
             retrievalEngine = retrievalEngine,
+            selectedModel = selectedModel,
+            modelVersion = modelVersion,
             isAnalyzing = isAnalyzing,
             onStatusChanged = { statusText = it },
             onInferenceFpsChanged = { inferenceFps = it },
@@ -337,8 +422,8 @@ private fun LiveCameraRetrievalContent(
 
     Text(
         text = inferenceFps?.let {
-            "Inference FPS: ${"%.2f".format(it)}"
-        } ?: "Inference FPS: --"
+            "Average FPS: ${"%.2f".format(it)}"
+        } ?: "Average FPS: --"
     )
 
     Spacer(modifier = Modifier.height(24.dp))
@@ -351,6 +436,8 @@ private fun LiveCameraRetrievalContent(
 @Composable
 private fun LiveCameraPreview(
     retrievalEngine: ClipRetrievalEngine,
+    selectedModel: ImageEncoderModel,
+    modelVersion: Int,
     isAnalyzing: Boolean,
     onStatusChanged: (String) -> Unit,
     onInferenceFpsChanged: (Float) -> Unit,
@@ -369,11 +456,20 @@ private fun LiveCameraPreview(
         modifier = Modifier.fillMaxSize()
     )
 
-    DisposableEffect(context, lifecycleOwner, previewView, retrievalEngine, isAnalyzing) {
+    DisposableEffect(
+        context,
+        lifecycleOwner,
+        previewView,
+        retrievalEngine,
+        selectedModel,
+        modelVersion,
+        isAnalyzing
+    ) {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
         val analysisExecutor = Executors.newSingleThreadExecutor()
         val mainHandler = Handler(Looper.getMainLooper())
         val isInferenceRunning = AtomicBoolean(false)
+        val frameElapsedMsSamples = ArrayDeque<Float>()
         var lastAnalyzedAtMs = 0L
 
         val listener = Runnable {
@@ -420,7 +516,12 @@ private fun LiveCameraPreview(
                             val inferenceElapsedMs =
                                 (System.nanoTime() - inferenceStartedAtNs) / 1_000_000.0f
                             val inferenceFps = if (inferenceElapsedMs > 0.0f) {
-                                1_000.0f / inferenceElapsedMs
+                                frameElapsedMsSamples.addLast(inferenceElapsedMs)
+                                while (frameElapsedMsSamples.size > FPS_AVERAGE_WINDOW_SIZE) {
+                                    frameElapsedMsSamples.removeFirst()
+                                }
+                                val totalElapsedMs = frameElapsedMsSamples.sum()
+                                frameElapsedMsSamples.size * 1_000.0f / totalElapsedMs
                             } else {
                                 0.0f
                             }
@@ -428,7 +529,9 @@ private fun LiveCameraPreview(
                             mainHandler.post {
                                 onResultsChanged(topKResults)
                                 onInferenceFpsChanged(inferenceFps)
-                                onStatusChanged("Live retrieval updated")
+                                onStatusChanged(
+                                    "Live retrieval updated: ${retrievalEngine.selectedModel.displayName}"
+                                )
                             }
                         } catch (e: Exception) {
                             Log.e(TAG, "Live retrieval failed", e)
@@ -451,7 +554,9 @@ private fun LiveCameraPreview(
                     imageAnalysis
                 )
                 onStatusChanged(
-                    if (isAnalyzing) {
+                    if (modelVersion > 0) {
+                        "Model switched: ${selectedModel.displayName}"
+                    } else if (isAnalyzing) {
                         "Live camera running"
                     } else {
                         "Live camera paused"

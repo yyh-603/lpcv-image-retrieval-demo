@@ -8,18 +8,29 @@ import com.example.lpcv_demo.data.EmbeddingAssetLoader
 import com.example.lpcv_demo.data.ImageFileResolver
 import com.example.lpcv_demo.data.ImagePreprocessor
 import com.example.lpcv_demo.data.TextAssetLoader
-import com.example.lpcv_demo.model.RetrievalResult
 import com.example.lpcv_demo.inference.SnpeImageEncoder
+import com.example.lpcv_demo.model.ImageEncoderModel
+import com.example.lpcv_demo.model.ImageEncoderModels
+import com.example.lpcv_demo.model.RetrievalResult
+import java.io.Closeable
 
 class ClipRetrievalEngine(
     private val context: Context
-) {
+) : Closeable {
     private val tag = "RetrievalLatency"
     private val embeddingDim = 768
+    val availableModels: List<ImageEncoderModel> = ImageEncoderModels.Available
 
-    private val imageEncoder by lazy {
-        SnpeImageEncoder(context.applicationContext)
-    }
+    var selectedModel: ImageEncoderModel = ImageEncoderModels.Default
+        private set
+
+    var modelVersion: Int = 0
+        private set
+
+    private val imageEncoders: Map<ImageEncoderModel, SnpeImageEncoder> =
+        availableModels.associateWith { model -> createImageEncoder(model) }
+
+    private var imageEncoder: SnpeImageEncoder = imageEncoders.getValue(selectedModel)
 
     private val texts: List<String> by lazy {
         TextAssetLoader.loadTexts(context)
@@ -33,6 +44,40 @@ class ClipRetrievalEngine(
         )
     }
 
+    @Synchronized
+    fun preloadAllModels() {
+        val startedAtNs = System.nanoTime()
+        imageEncoders.forEach { (model, encoder) ->
+            val modelStartedAtNs = System.nanoTime()
+            encoder.initialize()
+            Log.d(
+                tag,
+                "Preloaded model=${model.displayName} " +
+                    "asset=${model.assetName} " +
+                    "elapsed=${formatMs(elapsedMs(modelStartedAtNs))}ms"
+            )
+        }
+        Log.d(
+            tag,
+            "Preloaded ${imageEncoders.size} image encoder models " +
+                "total=${formatMs(elapsedMs(startedAtNs))}ms"
+        )
+    }
+
+    @Synchronized
+    fun selectModel(model: ImageEncoderModel): Boolean {
+        if (model == selectedModel) {
+            return false
+        }
+
+        selectedModel = model
+        imageEncoder = imageEncoders.getValue(model)
+        modelVersion += 1
+        Log.d("MyApp", "Selected image encoder model = ${model.displayName} (${model.assetName})")
+        return true
+    }
+
+    @Synchronized
     fun retrieveTopK(
         imageUri: Uri,
         k: Int = 5
@@ -63,6 +108,7 @@ class ClipRetrievalEngine(
         )
     }
 
+    @Synchronized
     fun retrieveTopK(
         bitmap: Bitmap,
         rotationDegrees: Int = 0,
@@ -116,8 +162,9 @@ class ClipRetrievalEngine(
         Log.d(
             tag,
             "Latency source=$source " +
+                "model=${selectedModel.displayName} asset=${selectedModel.assetName} " +
                 "preprocess=${formatMs(preprocessLatencyMs)}ms " +
-                "model=${formatMs(modelLatencyMs)}ms " +
+                "inference=${formatMs(modelLatencyMs)}ms " +
                 "retrieval=${formatMs(retrievalLatencyMs)}ms " +
                 "total=${formatMs(totalLatencyMs)}ms"
         )
@@ -131,5 +178,19 @@ class ClipRetrievalEngine(
 
     private fun formatMs(value: Float): String {
         return "%.2f".format(value)
+    }
+
+    private fun createImageEncoder(model: ImageEncoderModel): SnpeImageEncoder {
+        return SnpeImageEncoder(
+            context = context.applicationContext,
+            model = model
+        )
+    }
+
+    @Synchronized
+    override fun close() {
+        imageEncoders.values.forEach { encoder ->
+            encoder.close()
+        }
     }
 }

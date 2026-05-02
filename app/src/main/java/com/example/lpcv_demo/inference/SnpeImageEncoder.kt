@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import android.util.Log
 import com.example.lpcv_demo.data.AssetFileResolver
+import com.example.lpcv_demo.model.ImageEncoderModel
 import com.qualcomm.qti.snpe.FloatTensor
 import com.qualcomm.qti.snpe.NeuralNetwork
 import com.qualcomm.qti.snpe.SNPE
@@ -11,7 +12,10 @@ import com.qualcomm.qti.snpe.Tensor
 import java.io.Closeable
 import java.util.Arrays
 
-class SnpeImageEncoder(private val context: Context) : Closeable {
+class SnpeImageEncoder(
+    private val context: Context,
+    val model: ImageEncoderModel
+) : Closeable {
     private var neuralNetwork: NeuralNetwork? = null
     private var inputLayer: String = INPUT_LAYER
     private var outputLayer: String? = null
@@ -26,19 +30,24 @@ class SnpeImageEncoder(private val context: Context) : Closeable {
 
         val modelPath = AssetFileResolver.copyAssetToInternalFile(
             context = context,
-            assetName = MODEL_ASSET,
-            outputFileName = MODEL_ASSET,
-            overwrite = false
+            assetName = model.assetName,
+            outputFileName = model.assetName,
+            overwrite = true
         )
+        val modelFile = java.io.File(modelPath)
 
-        Log.d(TAG, "Initializing SNPE image encoder: $modelPath")
+        Log.d(
+            TAG,
+            "Loading SNPE model name=${model.displayName} asset=${model.assetName} " +
+                "path=$modelPath size=${modelFile.length()} bytes"
+        )
 
         val inputDimensions = hashMapOf(INPUT_LAYER to INPUT_DIMENSIONS.copyOf())
         val network = SNPE.NeuralNetworkBuilder(application)
             .setDebugEnabled(false)
             .setRuntimeOrder(NeuralNetwork.Runtime.DSP)
             .setPerformanceProfile(NeuralNetwork.PerformanceProfile.BURST)
-            .setModel(java.io.File(modelPath))
+            .setModel(modelFile)
             .setInputDimensions(inputDimensions)
             .setCpuFallbackEnabled(true)
             .setUseUserSuppliedBuffers(false)
@@ -68,6 +77,7 @@ class SnpeImageEncoder(private val context: Context) : Closeable {
         Log.d(TAG, "SNPE output layer = $outputLayer")
         Log.d(TAG, "SNPE input shape = ${shape?.contentToString()}")
         Log.d(TAG, "SNPE runtime = ${network.runtime}")
+        Log.d(TAG, "Loaded SNPE model name=${model.displayName} asset=${model.assetName}")
     }
 
     fun encode(inputTensor: FloatArray): FloatArray {
@@ -127,7 +137,6 @@ class SnpeImageEncoder(private val context: Context) : Closeable {
 
     companion object {
         private const val TAG = "SnpeImageEncoder"
-        private const val MODEL_ASSET = "image_encoder.dlc"
         private const val INPUT_LAYER = "image"
         private const val EMBEDDING_DIM = 768
         private val INPUT_DIMENSIONS = intArrayOf(1, 3, 224, 224)
