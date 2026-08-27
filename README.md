@@ -32,6 +32,7 @@ app/src/main/java/com/example/lpcv_demo/
 
 app/src/main/assets/
 ├── image_encoder.dlc     # 不放入 Git，需本機自行準備
+├── image_encoder_quant.dlc # 不放入 Git，需本機自行準備
 ├── inception_v3_quantized.dlc
 ├── text_embeddings.bin
 └── texts.json
@@ -46,12 +47,14 @@ GitHub 一般 Git repository 不接受超過 100 MB 的檔案，且 50 MB 以上
 
 - `app/libs/snpe-release.aar`
 - `app/src/main/assets/image_encoder.dlc`
+- `app/src/main/assets/image_encoder_quant.dlc`
 
 建置前請自行將檔案放到對應位置：
 
 ```text
 app/libs/snpe-release.aar
 app/src/main/assets/image_encoder.dlc
+app/src/main/assets/image_encoder_quant.dlc
 ```
 
 若目錄不存在，請先建立：
@@ -66,12 +69,13 @@ mkdir -p app/libs app/src/main/assets
 git lfs install
 git lfs track "app/libs/snpe-release.aar"
 git lfs track "app/src/main/assets/image_encoder.dlc"
+git lfs track "app/src/main/assets/image_encoder_quant.dlc"
 git add .gitattributes
 ```
 
 ## 建置與執行
 
-1. 準備 `snpe-release.aar` 與 `image_encoder.dlc`，並放到上方指定位置。
+1. 準備 `snpe-release.aar`、`image_encoder.dlc` 與 `image_encoder_quant.dlc`，並放到上方指定位置。
 2. 使用 Android Studio 開啟專案。
 3. 等待 Gradle Sync 完成。
 4. 連接支援 `arm64-v8a` 的 Android 裝置。
@@ -86,7 +90,7 @@ git add .gitattributes
 ## 注意事項
 
 - 專案依賴 `app/libs/snpe-release.aar`，但此檔案不提交到 Git。
-- `app/src/main/assets/image_encoder.dlc` 不提交到 Git，建置前需自行放入。
+- `app/src/main/assets/image_encoder.dlc` 與 `app/src/main/assets/image_encoder_quant.dlc` 不提交到 Git，建置前需自行放入。
 - 其他模型與檢索資料放在 `app/src/main/assets/`。
 - 目前 Gradle 設定只打包 `arm64-v8a`。
 - 若更換模型或文字資料，請確認輸入輸出格式與 embedding 維度一致。

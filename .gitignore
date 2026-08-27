@@ -18,3 +18,4 @@ local.properties
 # Large local dependencies/assets
 app/libs/snpe-release.aar
 app/src/main/assets/image_encoder.dlc
+app/src/main/assets/image_encoder_quant.dlc

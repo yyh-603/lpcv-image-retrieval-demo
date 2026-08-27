@@ -6,6 +6,8 @@ import android.graphics.Canvas
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.util.Log
+import java.nio.ByteBuffer
+import kotlin.math.roundToInt
 import kotlin.math.min
 
 object ImagePreprocessor {
@@ -89,6 +91,81 @@ object ImagePreprocessor {
         resizedBitmap.recycle()
 
         Log.d(TAG, "Frame image tensor size = ${tensor.size}")
+        return tensor
+    }
+
+    fun preprocessRgba8888Frame(
+        buffer: ByteBuffer,
+        sourceWidth: Int,
+        sourceHeight: Int,
+        rowStride: Int,
+        pixelStride: Int,
+        rotationDegrees: Int = 0,
+        width: Int = INPUT_WIDTH,
+        height: Int = INPUT_HEIGHT
+    ): FloatArray {
+        require(pixelStride >= CHANNELS) {
+            "RGBA frame pixelStride must be at least $CHANNELS, got $pixelStride"
+        }
+
+        val normalizedRotation = ((rotationDegrees % 360) + 360) % 360
+        val rotatedWidth = if (normalizedRotation == 90 || normalizedRotation == 270) {
+            sourceHeight
+        } else {
+            sourceWidth
+        }
+        val rotatedHeight = if (normalizedRotation == 90 || normalizedRotation == 270) {
+            sourceWidth
+        } else {
+            sourceHeight
+        }
+        val cropSize = min(rotatedWidth, rotatedHeight).toFloat()
+        val cropX = (rotatedWidth - cropSize) * 0.5f
+        val cropY = (rotatedHeight - cropSize) * 0.5f
+        val scaleX = cropSize / width
+        val scaleY = cropSize / height
+        val channelSize = width * height
+        val tensor = FloatArray(CHANNELS * channelSize)
+
+        for (y in 0 until height) {
+            val rotatedY = cropY + (y + 0.5f) * scaleY
+            for (x in 0 until width) {
+                val rotatedX = cropX + (x + 0.5f) * scaleX
+                val sourceXFloat: Float
+                val sourceYFloat: Float
+                when (normalizedRotation) {
+                    90 -> {
+                        sourceXFloat = rotatedY
+                        sourceYFloat = sourceHeight - rotatedX
+                    }
+                    180 -> {
+                        sourceXFloat = sourceWidth - rotatedX
+                        sourceYFloat = sourceHeight - rotatedY
+                    }
+                    270 -> {
+                        sourceXFloat = sourceWidth - rotatedY
+                        sourceYFloat = rotatedX
+                    }
+                    else -> {
+                        sourceXFloat = rotatedX
+                        sourceYFloat = rotatedY
+                    }
+                }
+                val sourceX = sourceXFloat.roundToInt().coerceIn(0, sourceWidth - 1)
+                val sourceY = sourceYFloat.roundToInt().coerceIn(0, sourceHeight - 1)
+                val offset = sourceY * rowStride + sourceX * pixelStride
+                val pixelIndex = y * width + x
+
+                val r = (buffer.get(offset).toInt() and 0xFF) * BYTES_TO_FLOAT
+                val g = (buffer.get(offset + 1).toInt() and 0xFF) * BYTES_TO_FLOAT
+                val b = (buffer.get(offset + 2).toInt() and 0xFF) * BYTES_TO_FLOAT
+
+                tensor[pixelIndex] = (r - mean[0]) * invStd[0]
+                tensor[channelSize + pixelIndex] = (g - mean[1]) * invStd[1]
+                tensor[channelSize * 2 + pixelIndex] = (b - mean[2]) * invStd[2]
+            }
+        }
+
         return tensor
     }
 

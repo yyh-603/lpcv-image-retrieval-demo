@@ -78,6 +78,11 @@ class ClipRetrievalEngine(
     }
 
     @Synchronized
+    fun isCurrentModelVersion(version: Int): Boolean {
+        return modelVersion == version
+    }
+
+    @Synchronized
     fun retrieveTopK(
         imageUri: Uri,
         k: Int = 5
@@ -99,7 +104,7 @@ class ClipRetrievalEngine(
         val inputTensor = ImagePreprocessor.preprocessImageFile(imagePath)
         val preprocessLatencyMs = elapsedMs(preprocessStartedAtNs)
 
-        return retrieveTopK(
+        return runRetrieval(
             inputTensor = inputTensor,
             k = k,
             source = source,
@@ -127,7 +132,7 @@ class ClipRetrievalEngine(
         )
         val preprocessLatencyMs = elapsedMs(preprocessStartedAtNs)
 
-        return retrieveTopK(
+        return runRetrieval(
             inputTensor = inputTensor,
             k = k,
             source = source,
@@ -136,7 +141,26 @@ class ClipRetrievalEngine(
         )
     }
 
-    private fun retrieveTopK(
+    @Synchronized
+    fun retrieveTopK(
+        inputTensor: FloatArray,
+        k: Int = 5,
+        source: String,
+        preprocessLatencyMs: Float,
+        totalStartedAtNs: Long = System.nanoTime()
+    ): List<RetrievalResult> {
+        imageEncoder.initialize()
+
+        return runRetrieval(
+            inputTensor = inputTensor,
+            k = k,
+            source = source,
+            totalStartedAtNs = totalStartedAtNs,
+            preprocessLatencyMs = preprocessLatencyMs
+        )
+    }
+
+    private fun runRetrieval(
         inputTensor: FloatArray,
         k: Int,
         source: String,

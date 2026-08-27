@@ -3,7 +3,6 @@ package com.example.lpcv_demo.ui.screen
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
-import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
@@ -29,6 +28,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -48,12 +48,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import coil.compose.rememberAsyncImagePainter
+import com.example.lpcv_demo.data.ImagePreprocessor
 import com.example.lpcv_demo.model.ImageEncoderModel
 import com.example.lpcv_demo.model.RetrievalResult
 import com.example.lpcv_demo.retrieval.ClipRetrievalEngine
@@ -314,7 +316,13 @@ private fun LiveCameraRetrievalContent(
     selectedModel: ImageEncoderModel,
     modelVersion: Int
 ) {
+    val configuration = LocalConfiguration.current
     val context = LocalContext.current
+    val previewHeight = when {
+        configuration.screenHeightDp < 700 -> 240.dp
+        configuration.screenHeightDp < 840 -> 280.dp
+        else -> 320.dp
+    }
 
     var hasCameraPermission by remember {
         mutableStateOf(context.hasCameraPermission())
@@ -378,7 +386,8 @@ private fun LiveCameraRetrievalContent(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(360.dp)
+            .height(previewHeight)
+            .clipToBounds()
     ) {
         LiveCameraPreview(
             retrievalEngine = retrievalEngine,
@@ -394,7 +403,7 @@ private fun LiveCameraRetrievalContent(
         )
     }
 
-    Spacer(modifier = Modifier.height(16.dp))
+    Spacer(modifier = Modifier.height(12.dp))
 
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -414,11 +423,11 @@ private fun LiveCameraRetrievalContent(
         }
     }
 
-    Spacer(modifier = Modifier.height(16.dp))
+    Spacer(modifier = Modifier.height(12.dp))
 
     Text(text = statusText)
 
-    Spacer(modifier = Modifier.height(8.dp))
+    Spacer(modifier = Modifier.height(4.dp))
 
     Text(
         text = inferenceFps?.let {
@@ -426,7 +435,7 @@ private fun LiveCameraRetrievalContent(
         } ?: "Average FPS: --"
     )
 
-    Spacer(modifier = Modifier.height(24.dp))
+    Spacer(modifier = Modifier.height(12.dp))
 
     if (results.isNotEmpty()) {
         RetrievalResultCard(results = results)
@@ -447,13 +456,16 @@ private fun LiveCameraPreview(
     val lifecycleOwner = LocalLifecycleOwner.current
     val previewView = remember {
         PreviewView(context).apply {
+            implementationMode = PreviewView.ImplementationMode.COMPATIBLE
             scaleType = PreviewView.ScaleType.FILL_CENTER
         }
     }
 
     AndroidView(
         factory = { previewView },
-        modifier = Modifier.fillMaxSize()
+        modifier = Modifier
+            .fillMaxSize()
+            .clipToBounds()
     )
 
     DisposableEffect(
@@ -468,11 +480,16 @@ private fun LiveCameraPreview(
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
         val analysisExecutor = Executors.newSingleThreadExecutor()
         val mainHandler = Handler(Looper.getMainLooper())
+        val isDisposed = AtomicBoolean(false)
         val isInferenceRunning = AtomicBoolean(false)
         val frameElapsedMsSamples = ArrayDeque<Float>()
         var lastAnalyzedAtMs = 0L
 
         val listener = Runnable {
+            if (isDisposed.get()) {
+                return@Runnable
+            }
+
             val cameraProvider = cameraProviderFuture.get()
 
             val preview = Preview.Builder()
@@ -488,7 +505,8 @@ private fun LiveCameraPreview(
                 .also { analysis ->
                     analysis.setAnalyzer(analysisExecutor) { imageProxy ->
                         val now = System.currentTimeMillis()
-                        val canAnalyze = isAnalyzing &&
+                        val canAnalyze = !isDisposed.get() &&
+                            isAnalyzing &&
                             now - lastAnalyzedAtMs >= LIVE_RETRIEVAL_INTERVAL_MS &&
                             isInferenceRunning.compareAndSet(false, true)
 
@@ -500,19 +518,31 @@ private fun LiveCameraPreview(
                         lastAnalyzedAtMs = now
 
                         try {
-                            val bitmap = imageProxy.toBitmapFromRgbaPlane()
                             val rotationDegrees = imageProxy.imageInfo.rotationDegrees
+                            val totalStartedAtNs = System.nanoTime()
+                            val preprocessStartedAtNs = System.nanoTime()
+                            val plane = imageProxy.planes.first()
+                            val buffer = plane.buffer
+                            buffer.rewind()
+                            val inputTensor = ImagePreprocessor.preprocessRgba8888Frame(
+                                buffer = buffer,
+                                sourceWidth = imageProxy.width,
+                                sourceHeight = imageProxy.height,
+                                rowStride = plane.rowStride,
+                                pixelStride = plane.pixelStride,
+                                rotationDegrees = rotationDegrees
+                            )
+                            val preprocessElapsedMs =
+                                (System.nanoTime() - preprocessStartedAtNs) / 1_000_000.0f
                             val inferenceStartedAtNs = System.nanoTime()
 
-                            val topKResults = try {
-                                retrievalEngine.retrieveTopK(
-                                    bitmap = bitmap,
-                                    rotationDegrees = rotationDegrees,
-                                    k = TOP_K
-                                )
-                            } finally {
-                                bitmap.recycle()
-                            }
+                            val topKResults = retrievalEngine.retrieveTopK(
+                                inputTensor = inputTensor,
+                                k = TOP_K,
+                                source = "live_camera",
+                                preprocessLatencyMs = preprocessElapsedMs,
+                                totalStartedAtNs = totalStartedAtNs
+                            )
                             val inferenceElapsedMs =
                                 (System.nanoTime() - inferenceStartedAtNs) / 1_000_000.0f
                             val inferenceFps = if (inferenceElapsedMs > 0.0f) {
@@ -527,6 +557,10 @@ private fun LiveCameraPreview(
                             }
 
                             mainHandler.post {
+                                if (isDisposed.get() || !retrievalEngine.isCurrentModelVersion(modelVersion)) {
+                                    return@post
+                                }
+
                                 onResultsChanged(topKResults)
                                 onInferenceFpsChanged(inferenceFps)
                                 onStatusChanged(
@@ -536,6 +570,10 @@ private fun LiveCameraPreview(
                         } catch (e: Exception) {
                             Log.e(TAG, "Live retrieval failed", e)
                             mainHandler.post {
+                                if (isDisposed.get() || !retrievalEngine.isCurrentModelVersion(modelVersion)) {
+                                    return@post
+                                }
+
                                 onStatusChanged("Live retrieval failed: ${e.message}")
                             }
                         } finally {
@@ -553,6 +591,9 @@ private fun LiveCameraPreview(
                     preview,
                     imageAnalysis
                 )
+                if (isDisposed.get()) {
+                    return@Runnable
+                }
                 onStatusChanged(
                     if (modelVersion > 0) {
                         "Model switched: ${selectedModel.displayName}"
@@ -564,6 +605,9 @@ private fun LiveCameraPreview(
                 )
             } catch (e: Exception) {
                 Log.e(TAG, "Camera binding failed", e)
+                if (isDisposed.get()) {
+                    return@Runnable
+                }
                 onStatusChanged("Camera failed: ${e.message}")
             }
         }
@@ -574,10 +618,11 @@ private fun LiveCameraPreview(
         )
 
         onDispose {
+            isDisposed.set(true)
             if (cameraProviderFuture.isDone) {
                 cameraProviderFuture.get().unbindAll()
             }
-            analysisExecutor.shutdown()
+            analysisExecutor.shutdownNow()
         }
     }
 }
@@ -608,7 +653,7 @@ private fun RetrievalResultCard(results: List<RetrievalResult>) {
                     style = MaterialTheme.typography.bodySmall
                 )
 
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(6.dp))
             }
         }
     }
@@ -619,35 +664,6 @@ private fun Context.hasCameraPermission(): Boolean {
         this,
         Manifest.permission.CAMERA
     ) == PackageManager.PERMISSION_GRANTED
-}
-
-private fun ImageProxy.toBitmapFromRgbaPlane(): Bitmap {
-    val plane = planes.first()
-    val buffer = plane.buffer
-    buffer.rewind()
-
-    val rowPaddingPixels = (plane.rowStride - plane.pixelStride * width) / plane.pixelStride
-    val paddedWidth = width + rowPaddingPixels
-    val paddedBitmap = Bitmap.createBitmap(
-        paddedWidth,
-        height,
-        Bitmap.Config.ARGB_8888
-    )
-    paddedBitmap.copyPixelsFromBuffer(buffer)
-
-    if (paddedWidth == width) {
-        return paddedBitmap
-    }
-
-    val bitmap = Bitmap.createBitmap(
-        paddedBitmap,
-        0,
-        0,
-        width,
-        height
-    )
-    paddedBitmap.recycle()
-    return bitmap
 }
 
 private enum class RetrievalScreenMode(val label: String) {
